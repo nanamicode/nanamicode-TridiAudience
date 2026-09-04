@@ -136,7 +136,7 @@ public:
         ncnn::Mat fi=ncnn::Mat::from_pixels(faceRgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
 
         {
-            ncnn::Extractor ex=head.create_extractor();ex.set_light_mode(true);ex.set_num_threads(2);
+            ncnn::Extractor ex=head.create_extractor();ex.set_light_mode(true);
             if(ex.input(headIn,fi)!=0)return r;
             if(headCombined>=0){
                 ncnn::Mat o;if(ex.extract(headCombined,o)!=0||o.total()<3)return r;
@@ -153,7 +153,7 @@ public:
 
         ncnn::Mat landmarks;
         {
-            ncnn::Extractor ex=lm.create_extractor();ex.set_light_mode(true);ex.set_num_threads(2);
+            ncnn::Extractor ex=lm.create_extractor();ex.set_light_mode(true);
             if(ex.input(lmIn,fi)!=0||ex.extract(lmOut,landmarks)!=0||landmarks.total()<8)return r;
         }
         Point e[4];
@@ -170,7 +170,7 @@ public:
         ncnn::Mat pose(3);pose[0]=r.yaw;pose[1]=r.pitch;pose[2]=r.roll;
         ncnn::Mat gv;
         {
-            ncnn::Extractor ex=gaze.create_extractor();ex.set_light_mode(true);ex.set_num_threads(2);
+            ncnn::Extractor ex=gaze.create_extractor();ex.set_light_mode(true);
             if(ex.input(leftIn,li)!=0||ex.input(rightIn,ri)!=0||ex.input(poseIn,pose)!=0||
                ex.extract(gazeOut,gv)!=0||gv.total()<3)return r;
         }
