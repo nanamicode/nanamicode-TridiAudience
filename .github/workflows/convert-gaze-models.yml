@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/convert-gaze-models.yml"
       - "scripts/**"
+      - "native/**"
   workflow_dispatch:
 
 jobs:
