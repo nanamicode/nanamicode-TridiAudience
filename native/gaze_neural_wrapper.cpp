@@ -106,6 +106,26 @@ struct Frame {
         }
         return true;
     }
+    bool cropRotated(const Rect& r,int ow,int oh,float angleDeg,std::vector<uint8_t>& dst) const {
+        if(r.w<2||r.h<2||r.x<0||r.y<0||r.x+r.w>lw||r.y+r.h>lh)return false;
+        const float rad=angleDeg*3.14159265358979323846f/180.f;
+        const float cs=std::cos(rad),sn=std::sin(rad);
+        const float cx=r.x+r.w*.5f,cy=r.y+r.h*.5f;
+        dst.resize((size_t)ow*oh*3);
+        for(int j=0;j<oh;j++){
+            const float dy=((j+.5f)/oh-.5f)*r.h;
+            for(int i=0;i<ow;i++){
+                const float dx=((i+.5f)/ow-.5f)*r.w;
+                // Same visual rotation convention as OpenCV warpAffine with
+                // getRotationMatrix2D(center, +angle).
+                const float sx=cx+cs*dx-sn*dy;
+                const float sy=cy+sn*dx+cs*dy;
+                if(sx<0||sy<0||sx>lw-1||sy>lh-1)return false;
+                rgbBilinear(sx,sy,&dst[((size_t)j*ow+i)*3]);
+            }
+        }
+        return true;
+    }
 };
 
 struct GazeResult {
@@ -164,10 +184,12 @@ public:
         }
         Rect le=eyeBox(e[0],e[1]),re=eyeBox(e[2],e[3]);
         std::vector<uint8_t> lrgb,rrgb;
-        if(!f.crop(le,60,60,lrgb)||!f.crop(re,60,60,rrgb))return r;
+        // Follow the official OMZ gaze pipeline: roll-align both eye crops,
+        // feed roll=0, then rotate the predicted gaze back afterwards.
+        if(!f.cropRotated(le,60,60,r.roll,lrgb)||!f.cropRotated(re,60,60,r.roll,rrgb))return r;
         ncnn::Mat li=ncnn::Mat::from_pixels(lrgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
         ncnn::Mat ri=ncnn::Mat::from_pixels(rrgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
-        ncnn::Mat pose(3);pose[0]=r.yaw;pose[1]=r.pitch;pose[2]=r.roll;
+        ncnn::Mat pose(3);pose[0]=r.yaw;pose[1]=r.pitch;pose[2]=0.f;
         ncnn::Mat gv;
         {
             ncnn::Extractor ex=gaze.create_extractor();ex.set_light_mode(true);
@@ -177,15 +199,31 @@ public:
         float norm=std::sqrt(gv[0]*gv[0]+gv[1]*gv[1]+gv[2]*gv[2]);
         if(norm<.25f||!std::isfinite(norm))return r;
         r.gx=gv[0]/norm;r.gy=gv[1]/norm;r.gz=gv[2]/norm;
+        {
+            const float rad=r.roll*3.14159265358979323846f/180.f;
+            const float cs=std::cos(rad),sn=std::sin(rad);
+            const float gx=r.gx*cs+r.gy*sn;
+            const float gy=-r.gx*sn+r.gy*cs;
+            r.gx=gx;r.gy=gy;
+        }
         // OMZ convention: straight toward camera ~= (0,0,-1).
         if(r.gz>-.16f)return r;
 
-        const float focal=.5f*(1.202f*f.lw+.676f*f.lh);
-        float z=focal*150.f/std::max(1.f,face.w);
+        // EMEET S600 factory profile: 73-degree diagonal FoV at its wide
+        // setting. Use the neural eye landmarks to estimate distance from
+        // average inter-eye spacing instead of relying on face-box width.
+        const float diagonal=std::sqrt((float)f.lw*f.lw+(float)f.lh*f.lh);
+        const float focal=diagonal/(2.f*std::tan(73.f*3.14159265358979323846f/360.f));
+        const float lcx=(e[0].x+e[1].x)*.5f,lcy=(e[0].y+e[1].y)*.5f;
+        const float rcx=(e[2].x+e[3].x)*.5f,rcy=(e[2].y+e[3].y)*.5f;
+        const float dx=lcx-rcx,dy=lcy-rcy;
+        const float interEyePx=std::sqrt(dx*dx+dy*dy);
+        if(interEyePx<18.f)return r;
+        const float z=focal*63.f/interEyePx;
         if(z<450.f||z>3600.f)return r;
-        float cx=face.x+face.w*.5f,cy=face.y+face.h*.40f;
-        float eyeX=(cx-f.lw*.5f)*z/focal;
-        float eyeY=-(cy-f.lh*.5f)*z/focal;
+        const float cx=(lcx+rcx)*.5f,cy=(lcy+rcy)*.5f;
+        const float eyeX=(cx-f.lw*.5f)*z/focal;
+        const float eyeY=-(cy-f.lh*.5f)*z/focal;
         float t=-z/r.gz;if(t<=0||!std::isfinite(t))return r;
         r.hitX=eyeX+t*r.gx;r.hitY=eyeY+t*r.gy;r.depth=z;
 
