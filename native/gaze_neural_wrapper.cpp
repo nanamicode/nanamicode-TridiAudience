@@ -430,7 +430,10 @@ Java_com_tridi_audience_NativeBridge_processYuv420(
 
         if(!globalReady)continue;
         const float det=a[p+DETECTOR_SCORE];
-        if(det<=0.f||originalAttentionEvaluation==0)continue;
+        const float fw=a[p+WIDTH],fh=a[p+HEIGHT];
+        const float fx=a[p+X],fy=a[p+Y];
+        if(det<.50f||originalAttentionEvaluation==0||fw<56.f||fh<56.f||
+           fx<0.f||fy<0.f||fx+fw>lw||fy+fh>lh)continue;
 
         const int64_t age=(tr->lastEvalNs==0)?0x3fffffffffffffffLL:(nowNs-tr->lastEvalNs);
         const int64_t need=w->trackIntervalNs(*tr);
