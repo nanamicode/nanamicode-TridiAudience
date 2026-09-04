@@ -220,7 +220,7 @@ public:
         const float interEyePx=std::sqrt(dx*dx+dy*dy);
         if(interEyePx<18.f)return r;
         const float z=focal*63.f/interEyePx;
-        if(z<450.f||z>3600.f)return r;
+        if(z<450.f||z>2600.f)return r;
         const float cx=(lcx+rcx)*.5f,cy=(lcy+rcy)*.5f;
         const float eyeX=(cx-f.lw*.5f)*z/focal;
         const float eyeY=-(cy-f.lh*.5f)*z/focal;
@@ -230,8 +230,11 @@ public:
         // Physical Tridi totem: display 320x540 mm; camera about 187.3 mm
         // horizontally from display centre and 70 mm below it, same plane.
         const float screenX=-187.3f,screenY=70.f;
-        // Modest interior margin protects the 27 mm camera/display-edge gap.
-        const float safeHalfW=136.f,safeHalfH=246.f;
+        // Reuse the established TRIDI_TOTEM_V1 precision-first evidence zone:
+        // central 45% of display width and 70% of display height. This keeps a
+        // strong angular gap from the camera lens, which sits only ~27 mm past
+        // the nearest physical display edge.
+        const float safeHalfW=72.f,safeHalfH=189.f;
         float nx=std::fabs(r.hitX-screenX)/safeHalfW;
         float ny=std::fabs(r.hitY-screenY)/safeHalfH;
         r.residual=std::max(nx,ny);
