@@ -94,14 +94,14 @@ struct Frame {
             out[k]=(uint8_t)clampi((int)std::lround(a+dy*(b-a)),0,255);
         }
     }
-    bool crop(const Rect& r,int ow,int oh,std::vector<uint8_t>& dst) const {
+    bool cropFast(const Rect& r,int ow,int oh,std::vector<uint8_t>& dst) const {
         if(r.w<2||r.h<2||r.x<0||r.y<0||r.x+r.w>lw||r.y+r.h>lh)return false;
         dst.resize((size_t)ow*oh*3);
         for(int j=0;j<oh;j++){
-            float sy=r.y+(j+.5f)*r.h/oh-.5f;
+            const int sy=(int)std::lround(r.y+(j+.5f)*r.h/oh-.5f);
             for(int i=0;i<ow;i++){
-                float sx=r.x+(i+.5f)*r.w/ow-.5f;
-                rgbBilinear(sx,sy,&dst[((size_t)j*ow+i)*3]);
+                const int sx=(int)std::lround(r.x+(i+.5f)*r.w/ow-.5f);
+                rgbAt(sx,sy,&dst[((size_t)j*ow+i)*3]);
             }
         }
         return true;
@@ -142,17 +142,17 @@ public:
         if(lm.load_param(assets,"gaze/landmarks35.param")!=0||lm.load_model(assets,"gaze/landmarks35.bin")!=0)return false;
         if(gaze.load_param(assets,"gaze/gaze.param")!=0||gaze.load_model(assets,"gaze/gaze.bin")!=0)return false;
         resolve();
+        faceRgb.reserve(60*60*3);leftRgb.reserve(60*60*3);rightRgb.reserve(60*60*3);
         LOGI("gaze io head=%d ypr=%d/%d/%d comb=%d lm=%d/%d gaze=%d/%d/%d -> %d",
              headIn,yawOut,pitchOut,rollOut,headCombined,lmIn,lmOut,leftIn,rightIn,poseIn,gazeOut);
         return headIn>=0&&lmIn>=0&&lmOut>=0&&leftIn>=0&&rightIn>=0&&poseIn>=0&&gazeOut>=0&&
                (headCombined>=0||(yawOut>=0&&pitchOut>=0&&rollOut>=0));
     }
 
-    GazeResult infer(const Frame& f,const Rect& face,float detector) const {
+    GazeResult infer(const Frame& f,const Rect& face,float detector) {
         GazeResult r;
         if(detector<.50f||face.w<56.f||face.h<56.f)return r;
-        std::vector<uint8_t> faceRgb;
-        if(!f.crop(face,60,60,faceRgb))return r;
+        if(!f.cropFast(face,60,60,faceRgb))return r;
         ncnn::Mat fi=ncnn::Mat::from_pixels(faceRgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
 
         {
@@ -183,12 +183,11 @@ public:
             e[i]={face.x+nx*face.w,face.y+ny*face.h};
         }
         Rect le=eyeBox(e[0],e[1]),re=eyeBox(e[2],e[3]);
-        std::vector<uint8_t> lrgb,rrgb;
         // Follow the official OMZ gaze pipeline: roll-align both eye crops,
         // feed roll=0, then rotate the predicted gaze back afterwards.
-        if(!f.cropRotated(le,60,60,r.roll,lrgb)||!f.cropRotated(re,60,60,r.roll,rrgb))return r;
-        ncnn::Mat li=ncnn::Mat::from_pixels(lrgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
-        ncnn::Mat ri=ncnn::Mat::from_pixels(rrgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
+        if(!f.cropRotated(le,60,60,r.roll,leftRgb)||!f.cropRotated(re,60,60,r.roll,rightRgb))return r;
+        ncnn::Mat li=ncnn::Mat::from_pixels(leftRgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
+        ncnn::Mat ri=ncnn::Mat::from_pixels(rightRgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
         ncnn::Mat pose(3);pose[0]=r.yaw;pose[1]=r.pitch;pose[2]=0.f;
         ncnn::Mat gv;
         {
@@ -285,20 +284,51 @@ private:
         }
     }
     ncnn::Net head,lm,gaze;
+    std::vector<uint8_t> faceRgb,leftRgb,rightRgb;
     int headIn=-1,yawOut=-1,pitchOut=-1,rollOut=-1,headCombined=-1;
     int lmIn=-1,lmOut=-1,leftIn=-1,rightIn=-1,poseIn=-1,gazeOut=-1;
 };
 
 struct Track {
     bool used=false,confirmed=false;
+    bool lastGazeValid=false;
     int id=0,genderReported=-2;
     jlong lastSeen=0;
+    int64_t lastEvalNs=0;
+    float lastResidual=9.f;
 };
 
 struct Wrapper {
     jlong core=0;
     NeuralGaze neural;
     Track tracks[256];
+
+    // Adaptive compute budget. The gaze stack is ~286 MFLOPs/evaluation;
+    // running it on every face of every camera frame saturates this ARMv7 box.
+    // We keep exact-frame evidence semantics, but sample unresolved tracks with
+    // a global duty-cycle budget and temporarily accelerate when gaze is near
+    // the physical display.
+    int64_t emaInferNs=80000000LL;
+    int64_t lastGlobalEvalNs=0;
+    int64_t hotUntilNs=0;
+
+    int64_t globalIntervalNs(int64_t now) const {
+        if(now<hotUntilNs)
+            return clampNs((emaInferNs*17)/10,80000000LL,180000000LL);
+        return clampNs(emaInferNs*3,140000000LL,420000000LL);
+    }
+    int64_t trackIntervalNs(const Track& t) const {
+        if(t.lastEvalNs==0)return 0;
+        if(t.lastGazeValid&&t.lastResidual<1.55f)return 110000000LL;
+        if(t.lastGazeValid&&t.lastResidual<2.20f)return 180000000LL;
+        return 260000000LL;
+    }
+    void observeInfer(int64_t elapsedNs,const GazeResult& g,int64_t endNs){
+        elapsedNs=clampNs(elapsedNs,1000000LL,1000000000LL);
+        emaInferNs=(emaInferNs*7+elapsedNs*3)/10;
+        lastGlobalEvalNs=endNs;
+        if(g.valid&&g.residual<1.55f)hotUntilNs=endNs+700000000LL;
+    }
 
     Track* track(int id,jlong ts){
         int free=-1,old=0;jlong oldest=0x7fffffffffffffffLL;
@@ -367,15 +397,28 @@ Java_com_tridi_audience_NativeBridge_processYuv420(
     Frame f{yp,up,vp,yo,yrs,uo,urs,ups,vo,vrs,vps,sw,sh,lw,lh,rr};
 
     int n=(int)std::lround(a[4]);if(n<0)n=0;while(n&&HEADER+n*STRIDE>len)n--;
+    const int64_t nowNs=monotonicNs();
+    const bool globalReady=(w->lastGlobalEvalNs==0)||(nowNs-w->lastGlobalEvalNs>=w->globalIntervalNs(nowNs));
+    int bestK=-1;
+    double bestPriority=-1.0;
+
+    // Cheap pass: preserve the stable core outputs/events and choose at most
+    // one unresolved fresh face for the expensive 3-network gaze stack.
     for(int k=0;k<n;k++){
         int p=HEADER+k*STRIDE;
-        int id=(int)std::lround(a[p+ID]);Track* tr=w->track(id,ts);
+        int id=(int)std::lround(a[p+ID]);
+        Track* tr=w->track(id,ts);
         int originalFlags=(int)std::lround(a[p+EVENT_FLAGS]);
         int originalAttentionEvaluation=(int)std::lround(a[p+ATTENTION_EVALUATION]);
-        int flags=originalFlags&1; // preserve reach only; neural gate owns impression/attribution.
+        int flags=originalFlags&1;
         int gender=a[p+GENDER]>=.5f?1:(a[p+GENDER]>-.5f?0:-1);
 
-        a[p+ATTENTIVE]=0;a[p+NEW_IMPRESSION]=0;a[p+ATTENTION_EVALUATION]=0;a[p+ATTENTION_STREAK]=0;
+        a[p+ATTENTIVE]=0;
+        a[p+NEW_IMPRESSION]=0;
+        a[p+ATTENTION_EVALUATION]=0;
+        a[p+ATTENTION_STREAK]=0;
+        a[p+ATTENTION_GEOMETRY_VALID]=0;
+
         if(tr->confirmed){
             if(tr->genderReported==-1&&gender>=0){flags|=2;tr->genderReported=gender;}
             else if(tr->genderReported==0&&gender==1){flags|=4;tr->genderReported=1;}
@@ -383,21 +426,39 @@ Java_com_tridi_audience_NativeBridge_processYuv420(
             a[p+EVENT_FLAGS]=(float)flags;
             continue;
         }
+        a[p+EVENT_FLAGS]=(float)flags;
 
-        // Positive detector score means the exported rectangle is the current,
-        // fresh SCRFD face rectangle rather than a tracked body rectangle.
-        float det=a[p+DETECTOR_SCORE];
-        // The stable core resets ATTENTION_EVALUATION every frame and writes
-        // it only from updateFaceState(), which is called with the raw SCRFD
-        // detection from this exact YUV frame. This prevents using a stale
-        // tracked face box on a newer JPEG frame.
-        if(det<=0.f||originalAttentionEvaluation==0){
-            a[p+ATTENTION_GEOMETRY_VALID]=0;
-            a[p+EVENT_FLAGS]=(float)flags;
-            continue;
-        }
+        if(!globalReady)continue;
+        const float det=a[p+DETECTOR_SCORE];
+        if(det<=0.f||originalAttentionEvaluation==0)continue;
+
+        const int64_t age=(tr->lastEvalNs==0)?0x3fffffffffffffffLL:(nowNs-tr->lastEvalNs);
+        const int64_t need=w->trackIntervalNs(*tr);
+        if(tr->lastEvalNs!=0&&age<need)continue;
+
+        // Fairness across several people: the track most overdue wins.
+        // A never-evaluated track wins immediately.
+        const double priority=(tr->lastEvalNs==0)?1.0e18:(double)age/(double)std::max<int64_t>(1,need);
+        if(priority>bestPriority){bestPriority=priority;bestK=k;}
+    }
+
+    if(bestK>=0){
+        const int p=HEADER+bestK*STRIDE;
+        const int id=(int)std::lround(a[p+ID]);
+        Track* tr=w->track(id,ts);
+        const float det=a[p+DETECTOR_SCORE];
+        const int gender=a[p+GENDER]>=.5f?1:(a[p+GENDER]>-.5f?0:-1);
+        int flags=(int)std::lround(a[p+EVENT_FLAGS]);
         Rect face{a[p+X],a[p+Y],a[p+WIDTH],a[p+HEIGHT]};
+
+        const int64_t t0=monotonicNs();
         GazeResult g=w->neural.infer(f,face,det);
+        const int64_t t1=monotonicNs();
+        tr->lastEvalNs=t1;
+        tr->lastGazeValid=g.valid;
+        tr->lastResidual=g.residual;
+        w->observeInfer(t1-t0,g,t1);
+
         a[p+ATTENTION_SCORE]=g.score;
         a[p+SIGNED_YAW_EYE]=(std::fabs(g.gz)>.01f)?g.gx/(-g.gz):0.f;
         a[p+SIGNED_YAW_MOUTH]=(std::fabs(g.gz)>.01f)?g.gy/(-g.gz):0.f;
@@ -411,15 +472,16 @@ Java_com_tridi_audience_NativeBridge_processYuv420(
         a[p+ATTENTION_EVALUATION]=g.valid?-1.f:0.f;
 
         if(g.accepted){
-            // Core invariant: 50 bad frames + 1 true frame = exactly one impression.
-            // NEW_IMPRESSION is raised only on this exact current frame, so Java
-            // JPEG-encodes and uploads this exact winner.
+            // Temporal OR is unchanged: a positive on this sampled current
+            // frame is immediately the one and only winner/JPEG for the track.
             tr->confirmed=true;
-            a[p+ATTENTIVE]=1.f;a[p+NEW_IMPRESSION]=1.f;
-            a[p+ATTENTION_EVALUATION]=1.f;a[p+ATTENTION_STREAK]=1.f;
+            a[p+ATTENTIVE]=1.f;
+            a[p+NEW_IMPRESSION]=1.f;
+            a[p+ATTENTION_EVALUATION]=1.f;
+            a[p+ATTENTION_STREAK]=1.f;
             if(gender>=0){flags|=2;tr->genderReported=gender;}else tr->genderReported=-1;
+            a[p+EVENT_FLAGS]=(float)flags;
         }
-        a[p+EVENT_FLAGS]=(float)flags;
     }
     env->ReleaseFloatArrayElements(arr,a,0);
     return arr;
