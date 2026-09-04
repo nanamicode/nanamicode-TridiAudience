@@ -44,11 +44,14 @@ jobs:
 
           HP_BASE="https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/head-pose-estimation-adas-0001/FP32/head-pose-estimation-adas-0001"
           LM_BASE="https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/facial-landmarks-35-adas-0002/FP32/facial-landmarks-35-adas-0002"
+          GZ_BASE="https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/gaze-estimation-adas-0002/FP32/gaze-estimation-adas-0002"
 
           curl -fL --retry 4 "$HP_BASE.xml" -o work/ir/head_pose.xml
           curl -fL --retry 4 "$HP_BASE.bin" -o work/ir/head_pose.bin
           curl -fL --retry 4 "$LM_BASE.xml" -o work/ir/landmarks35.xml
           curl -fL --retry 4 "$LM_BASE.bin" -o work/ir/landmarks35.bin
+          curl -fL --retry 4 "$GZ_BASE.xml" -o work/ir/gaze.xml
+          curl -fL --retry 4 "$GZ_BASE.bin" -o work/ir/gaze.bin
 
       - name: Convert facial-landmarks-35 ADAS IR to ONNX
         run: |
@@ -83,6 +86,13 @@ jobs:
         run: |
           set -euxo pipefail
           python scripts/select_gaze_onnx.py work/pinto_gaze work/onnx/gaze.onnx
+
+      - name: Validate ONNX models against original Open Model Zoo IR
+        run: |
+          set -euxo pipefail
+          python scripts/validate_onnx_equivalence.py \
+            work/ir/landmarks35.xml work/onnx/landmarks35.onnx \
+            work/ir/gaze.xml work/onnx/gaze.onnx
 
       - name: Inspect ONNX inputs and outputs
         run: |
@@ -159,13 +169,18 @@ jobs:
           cmake --build work/native-build --parallel 2
           mkdir -p work/package/lib/armeabi-v7a work/package/assets/gaze
           cp work/native-build/libtridi_vision.so work/package/lib/armeabi-v7a/
+          LIBOMP="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" -type f -path '*/arm-linux-androideabi*/libomp.so' | head -n1)"
+          test -n "$LIBOMP"
+          cp "$LIBOMP" work/package/lib/armeabi-v7a/libomp.so
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded work/package/lib/armeabi-v7a/libtridi_vision.so
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded work/package/lib/armeabi-v7a/libomp.so
           cp work/ncnn/head_pose.param work/ncnn/head_pose.bin work/package/assets/gaze/
           cp work/ncnn/landmarks35.param work/ncnn/landmarks35.bin work/package/assets/gaze/
           cp work/ncnn/gaze.param work/ncnn/gaze.bin work/package/assets/gaze/
-          file work/package/lib/armeabi-v7a/libtridi_vision.so
+          file work/package/lib/armeabi-v7a/libtridi_vision.so work/package/lib/armeabi-v7a/libomp.so
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d \
             work/package/lib/armeabi-v7a/libtridi_vision.so | tee work/package/ELF_DYNAMIC.txt
-          sha256sum work/package/lib/armeabi-v7a/libtridi_vision.so \
+          sha256sum work/package/lib/armeabi-v7a/libtridi_vision.so work/package/lib/armeabi-v7a/libomp.so \
             work/package/assets/gaze/* | tee work/package/CHECKSUMS_SHA256.txt
 
       - name: Upload ARMv7 GazeNet package
