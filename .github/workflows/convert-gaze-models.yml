@@ -1,0 +1,121 @@
+name: convert-gaze-models
+
+on:
+  push:
+    branches:
+      - work/gazenet-v1.22.0
+    paths:
+      - ".github/workflows/convert-gaze-models.yml"
+      - "scripts/**"
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install converters
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "onnx==1.17.0" "protobuf<6" "pnnx==20260526"
+          git clone --depth 1 https://github.com/kuroko1t/openvino2onnx.git /tmp/openvino2onnx
+          python -m pip install /tmp/openvino2onnx
+
+      - name: Download Open Model Zoo IR models
+        run: |
+          set -euxo pipefail
+          mkdir -p work/ir work/onnx work/ncnn
+
+          HP_BASE="https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/head-pose-estimation-adas-0001/FP32/head-pose-estimation-adas-0001"
+          LM_BASE="https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/facial-landmarks-35-adas-0002/FP32/facial-landmarks-35-adas-0002"
+
+          curl -fL --retry 4 "$HP_BASE.xml" -o work/ir/head_pose.xml
+          curl -fL --retry 4 "$HP_BASE.bin" -o work/ir/head_pose.bin
+          curl -fL --retry 4 "$LM_BASE.xml" -o work/ir/landmarks35.xml
+          curl -fL --retry 4 "$LM_BASE.bin" -o work/ir/landmarks35.bin
+
+      - name: Convert head pose and landmarks OpenVINO IR to ONNX
+        run: |
+          set -euxo pipefail
+          cd work/ir
+          vino2onnx head_pose
+          vino2onnx landmarks35
+          mv head-pose-estimation-adas-0001.onnx ../onnx/head_pose.onnx
+          mv facial-landmarks-35-adas-0002.onnx ../onnx/landmarks35.onnx
+
+      - name: Download PINTO gaze ADAS ONNX bundle
+        run: |
+          set -euxo pipefail
+          mkdir -p work/pinto_gaze
+          curl -fL --retry 4             "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/091_gaze-estimation-adas-0002/resources_new_onnx_only.tar.gz"             -o work/pinto_gaze/resources.tar.gz
+          tar -xzf work/pinto_gaze/resources.tar.gz -C work/pinto_gaze
+          echo "=== PINTO gaze ONNX candidates ==="
+          find work/pinto_gaze -type f -name '*.onnx' -printf '%s %p\n' | sort -n
+
+      - name: Select gaze ADAS ONNX
+        run: |
+          set -euxo pipefail
+          python scripts/select_gaze_onnx.py work/pinto_gaze work/onnx/gaze.onnx
+
+      - name: Inspect ONNX inputs and outputs
+        run: |
+          set -euxo pipefail
+          python scripts/inspect_onnx.py work/onnx/head_pose.onnx
+          python scripts/inspect_onnx.py work/onnx/landmarks35.onnx
+          python scripts/inspect_onnx.py work/onnx/gaze.onnx
+
+      - name: Convert ONNX to NCNN
+        run: |
+          set -euxo pipefail
+          cd work/ncnn
+          pnnx ../onnx/head_pose.onnx inputshape=[1,3,60,60]
+          mv head_pose.ncnn.param head_pose.param
+          mv head_pose.ncnn.bin head_pose.bin
+
+          pnnx ../onnx/landmarks35.onnx inputshape=[1,3,60,60]
+          mv landmarks35.ncnn.param landmarks35.param
+          mv landmarks35.ncnn.bin landmarks35.bin
+
+          pnnx ../onnx/gaze.onnx 'inputshape=[1,3,60,60],[1,3,60,60],[1,3]'
+          mv gaze.ncnn.param gaze.param
+          mv gaze.ncnn.bin gaze.bin
+
+          echo "=== NCNN files ==="
+          ls -lh *.param *.bin
+          echo "=== head pose param tail ==="
+          tail -n 12 head_pose.param
+          echo "=== landmarks param tail ==="
+          tail -n 12 landmarks35.param
+          echo "=== gaze param head/tail ==="
+          head -n 12 gaze.param
+          tail -n 20 gaze.param
+
+      - name: Validate NCNN assets structurally
+        run: |
+          set -euxo pipefail
+          python scripts/validate_ncnn_models.py work/ncnn
+
+      - name: Checksums
+        run: |
+          set -euxo pipefail
+          (cd work/ncnn && sha256sum *.param *.bin) | tee work/ncnn/CHECKSUMS_SHA256.txt
+
+      - name: Upload converted neural gaze stack
+        uses: actions/upload-artifact@v4
+        with:
+          name: tridi-gaze-ncnn-armv7-input-assets
+          path: |
+            work/ncnn/*.param
+            work/ncnn/*.bin
+            work/ncnn/CHECKSUMS_SHA256.txt
+            work/onnx/*.onnx
+          compression-level: 6
+          retention-days: 14
