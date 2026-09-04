@@ -368,6 +368,7 @@ Java_com_tridi_audience_NativeBridge_processYuv420(
         int p=HEADER+k*STRIDE;
         int id=(int)std::lround(a[p+ID]);Track* tr=w->track(id,ts);
         int originalFlags=(int)std::lround(a[p+EVENT_FLAGS]);
+        int originalAttentionEvaluation=(int)std::lround(a[p+ATTENTION_EVALUATION]);
         int flags=originalFlags&1; // preserve reach only; neural gate owns impression/attribution.
         int gender=a[p+GENDER]>=.5f?1:(a[p+GENDER]>-.5f?0:-1);
 
@@ -383,7 +384,11 @@ Java_com_tridi_audience_NativeBridge_processYuv420(
         // Positive detector score means the exported rectangle is the current,
         // fresh SCRFD face rectangle rather than a tracked body rectangle.
         float det=a[p+DETECTOR_SCORE];
-        if(det<=0.f){
+        // The stable core resets ATTENTION_EVALUATION every frame and writes
+        // it only from updateFaceState(), which is called with the raw SCRFD
+        // detection from this exact YUV frame. This prevents using a stale
+        // tracked face box on a newer JPEG frame.
+        if(det<=0.f||originalAttentionEvaluation==0){
             a[p+ATTENTION_GEOMETRY_VALID]=0;
             a[p+EVENT_FLAGS]=(float)flags;
             continue;
