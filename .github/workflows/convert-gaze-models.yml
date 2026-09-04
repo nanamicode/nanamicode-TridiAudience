@@ -97,16 +97,16 @@ jobs:
           set -euxo pipefail
           cd work/ncnn
           pnnx ../onnx/head_pose.onnx inputshape=[1,3,60,60]
-          mv head_pose.ncnn.param head_pose.param
-          mv head_pose.ncnn.bin head_pose.bin
+          mv ../onnx/head_pose.ncnn.param head_pose.param
+          mv ../onnx/head_pose.ncnn.bin head_pose.bin
 
           pnnx ../onnx/landmarks35.onnx inputshape=[1,3,60,60]
-          mv landmarks35.ncnn.param landmarks35.param
-          mv landmarks35.ncnn.bin landmarks35.bin
+          mv ../onnx/landmarks35.ncnn.param landmarks35.param
+          mv ../onnx/landmarks35.ncnn.bin landmarks35.bin
 
           pnnx ../onnx/gaze.onnx 'inputshape=[1,3,60,60],[1,3,60,60],[1,3]'
-          mv gaze.ncnn.param gaze.param
-          mv gaze.ncnn.bin gaze.bin
+          mv ../onnx/gaze.ncnn.param gaze.param
+          mv ../onnx/gaze.ncnn.bin gaze.bin
 
           echo "=== NCNN files ==="
           ls -lh *.param *.bin
@@ -127,6 +127,51 @@ jobs:
         run: |
           set -euxo pipefail
           (cd work/ncnn && sha256sum *.param *.bin) | tee work/ncnn/CHECKSUMS_SHA256.txt
+
+      - name: Download NCNN Android ARMv7 SDK
+        run: |
+          set -euxo pipefail
+          mkdir -p work/ncnn_sdk
+          curl -fL --retry 4 \
+            "https://github.com/Tencent/ncnn/releases/download/20260526/ncnn-20260526-android.zip" \
+            -o work/ncnn_sdk/ncnn.zip
+          unzip -q work/ncnn_sdk/ncnn.zip -d work/ncnn_sdk/unpacked
+          find work/ncnn_sdk/unpacked -name libncnn.a -print
+
+      - name: Build ARMv7 neural gaze JNI wrapper
+        run: |
+          set -euxo pipefail
+          LIBNCNN="$(find "$PWD/work/ncnn_sdk/unpacked" -path '*/armeabi-v7a/lib/libncnn.a' | head -n1)"
+          test -n "$LIBNCNN"
+          NCNN_ROOT="$(dirname "$(dirname "$(dirname "$LIBNCNN")")")"
+          echo "NCNN_ROOT=$NCNN_ROOT"
+          cmake -S native -B work/native-build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=armeabi-v7a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNCNN_ROOT="$NCNN_ROOT"
+          cmake --build work/native-build --parallel 2
+          mkdir -p work/package/lib/armeabi-v7a work/package/assets/gaze
+          cp work/native-build/libtridi_vision.so work/package/lib/armeabi-v7a/
+          cp work/ncnn/head_pose.param work/ncnn/head_pose.bin work/package/assets/gaze/
+          cp work/ncnn/landmarks35.param work/ncnn/landmarks35.bin work/package/assets/gaze/
+          cp work/ncnn/gaze.param work/ncnn/gaze.bin work/package/assets/gaze/
+          file work/package/lib/armeabi-v7a/libtridi_vision.so
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d \
+            work/package/lib/armeabi-v7a/libtridi_vision.so | tee work/package/ELF_DYNAMIC.txt
+          sha256sum work/package/lib/armeabi-v7a/libtridi_vision.so \
+            work/package/assets/gaze/* | tee work/package/CHECKSUMS_SHA256.txt
+
+      - name: Upload ARMv7 GazeNet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: tridi-gazenet-v1.22.0-armv7
+          path: |
+            work/package/**
+          compression-level: 6
+          retention-days: 14
 
       - name: Upload converted neural gaze stack
         uses: actions/upload-artifact@v4
