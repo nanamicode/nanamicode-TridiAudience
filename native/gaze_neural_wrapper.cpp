@@ -323,9 +323,12 @@ struct Wrapper {
     int64_t hotUntilNs=0;
 
     int64_t globalIntervalNs(int64_t now) const {
+        // Normal mode targets ~25% duty for the heavy 3-network stack.
+        // Only while the previous neural ray is already near the display do
+        // we temporarily raise sampling to ~50% duty to catch the winner.
         if(now<hotUntilNs)
-            return clampNs((emaInferNs*17)/10,80000000LL,180000000LL);
-        return clampNs(emaInferNs*3,140000000LL,420000000LL);
+            return clampNs(emaInferNs*2,100000000LL,220000000LL);
+        return clampNs(emaInferNs*4,180000000LL,520000000LL);
     }
     int64_t trackIntervalNs(const Track& t) const {
         if(t.lastEvalNs==0)return 0;
