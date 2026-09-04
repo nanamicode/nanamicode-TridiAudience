@@ -26,6 +26,8 @@ jobs:
           set -euxo pipefail
           python -m pip install --upgrade pip
           python -m pip install "onnx==1.17.0" "protobuf<6" "pnnx==20260526"
+          git clone --depth 1 https://github.com/kuroko1t/openvino2onnx.git /tmp/openvino2onnx
+          python -m pip install /tmp/openvino2onnx
 
       - name: Download Open Model Zoo IR models
         run: |
@@ -43,22 +45,11 @@ jobs:
       - name: Convert facial-landmarks-35 ADAS IR to ONNX
         run: |
           set -euxo pipefail
-          mkdir -p work/landmarks_convert
-          docker pull ghcr.io/pinto0309/openvino2tensorflow:latest
-          docker run --rm \
-            -v "$PWD/work:/home/user/workdir" \
-            -w /home/user/workdir \
-            ghcr.io/pinto0309/openvino2tensorflow:latest \
-            openvino2tensorflow \
-              --model_path ir/landmarks35.xml \
-              --model_output_path landmarks_convert \
-              --output_onnx \
-              --onnx_opset 11 \
-              --keep_input_tensor_in_nchw \
-              --string_formulas_for_normalization 'data * 1' \
-              --non_verbose
-          find work/landmarks_convert -type f -name '*.onnx' -printf '%s %p\n' | sort -n
-          python scripts/select_model_onnx.py landmarks work/landmarks_convert work/onnx/landmarks35.onnx
+          cd work/ir
+          vino2onnx landmarks35
+          mv facial-landmarks-35-adas-0002.onnx ../onnx/landmarks35.onnx
+          cd ../..
+          python scripts/fix_vino_onnx.py work/onnx/landmarks35.onnx
 
       - name: Download PINTO head-pose ADAS ONNX bundle
         run: |
@@ -96,13 +87,13 @@ jobs:
         run: |
           set -euxo pipefail
           cd work/ncnn
-          pnnx ../onnx/head_pose.onnx inputshape=[1,3,60,60]
-          mv ../onnx/head_pose.ncnn.param head_pose.param
-          mv ../onnx/head_pose.ncnn.bin head_pose.bin
-
           pnnx ../onnx/landmarks35.onnx inputshape=[1,3,60,60]
           mv ../onnx/landmarks35.ncnn.param landmarks35.param
           mv ../onnx/landmarks35.ncnn.bin landmarks35.bin
+
+          pnnx ../onnx/head_pose.onnx inputshape=[1,3,60,60]
+          mv ../onnx/head_pose.ncnn.param head_pose.param
+          mv ../onnx/head_pose.ncnn.bin head_pose.bin
 
           pnnx ../onnx/gaze.onnx 'inputshape=[1,3,60,60],[1,3,60,60],[1,3]'
           mv ../onnx/gaze.ncnn.param gaze.param
