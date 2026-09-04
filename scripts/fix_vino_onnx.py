@@ -28,6 +28,17 @@ def main(path):
     m = onnx.load(path)
     fixed = []
     for node in m.graph.node:
+        if node.op_type == "Reshape":
+            # vino2onnx hard-codes allowzero=1, but OpenVINO Reshape uses 0 as
+            # "copy this source dimension" for these ADAS graphs.
+            found = False
+            for attr in node.attribute:
+                if attr.name == "allowzero":
+                    attr.i = 0
+                    found = True
+            if not found:
+                from onnx import helper
+                node.attribute.append(helper.make_attribute("allowzero", 0))
         if node.op_type not in ("Reshape", "Unsqueeze", "Squeeze", "Expand", "Tile"):
             continue
         if len(node.input) < 2:
