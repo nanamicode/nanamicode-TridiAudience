@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <time.h>
 #include <vector>
 
 #include "net.h"
@@ -31,6 +32,15 @@ enum {
 
 static float clampf(float v,float lo,float hi){return std::max(lo,std::min(v,hi));}
 static int clampi(int v,int lo,int hi){return std::max(lo,std::min(v,hi));}
+
+static int64_t monotonicNs(){
+    timespec t{};
+    clock_gettime(CLOCK_MONOTONIC,&t);
+    return (int64_t)t.tv_sec*1000000000LL+(int64_t)t.tv_nsec;
+}
+static int64_t clampNs(int64_t v,int64_t lo,int64_t hi){
+    return std::max(lo,std::min(v,hi));
+}
 
 using CoreCreateFn=jlong(*)(JNIEnv*,jclass,jobject);
 using CoreDestroyFn=void(*)(JNIEnv*,jclass,jlong);
