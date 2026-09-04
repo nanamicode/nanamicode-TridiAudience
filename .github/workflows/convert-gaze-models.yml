@@ -169,7 +169,8 @@ jobs:
           cmake --build work/native-build --parallel 2
           mkdir -p work/package/lib/armeabi-v7a work/package/assets/gaze
           cp work/native-build/libtridi_vision.so work/package/lib/armeabi-v7a/
-          LIBOMP="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" -type f -path '*/arm-linux-androideabi*/libomp.so' | head -n1)"
+          LIBOMP="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" -type f -path '*/lib/linux/arm/libomp.so' | head -n1)"
+          if [ -z "$LIBOMP" ]; then LIBOMP="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" -type f -name libomp.so | grep '/arm/' | head -n1)"; fi
           test -n "$LIBOMP"
           cp "$LIBOMP" work/package/lib/armeabi-v7a/libomp.so
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded work/package/lib/armeabi-v7a/libtridi_vision.so
