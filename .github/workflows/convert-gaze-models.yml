@@ -25,7 +25,14 @@ jobs:
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
-          python -m pip install "onnx==1.17.0" "protobuf<6" "pnnx==20260526"
+          python -m pip install "onnx==1.17.0" "protobuf<6"
+          mkdir -p "$HOME/pnnx"
+          curl -fL --retry 4 "https://github.com/pnnx/pnnx/releases/download/20260704/pnnx-20260704-linux.zip" -o /tmp/pnnx.zip
+          unzip -q /tmp/pnnx.zip -d "$HOME/pnnx"
+          PNNX_BIN="$(find "$HOME/pnnx" -type f -name pnnx | head -n1)"
+          chmod +x "$PNNX_BIN"
+          sudo ln -sf "$PNNX_BIN" /usr/local/bin/pnnx
+          pnnx --version || true
           git clone --depth 1 https://github.com/kuroko1t/openvino2onnx.git /tmp/openvino2onnx
           python -m pip install /tmp/openvino2onnx
 
