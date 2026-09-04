@@ -50,6 +50,8 @@ jobs:
           vino2onnx landmarks35
           mv head-pose-estimation-adas-0001.onnx ../onnx/head_pose.onnx
           mv facial-landmarks-35-adas-0002.onnx ../onnx/landmarks35.onnx
+          cd ../..
+          python scripts/fix_vino_onnx.py work/onnx/head_pose.onnx work/onnx/landmarks35.onnx
 
       - name: Download PINTO gaze ADAS ONNX bundle
         run: |
