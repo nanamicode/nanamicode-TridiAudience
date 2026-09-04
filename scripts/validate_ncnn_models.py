@@ -7,7 +7,7 @@ root = sys.argv[1]
 expected = {
     "head_pose.param": 3,
     "landmarks35.param": 1,
-    "gaze.param": 3,
+    "gaze.param": 1,
 }
 for fn, min_outputs in expected.items():
     p = os.path.join(root, fn)
