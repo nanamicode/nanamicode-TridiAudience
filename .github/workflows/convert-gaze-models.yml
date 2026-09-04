@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
-          python -m pip install "onnx==1.17.0" "protobuf<6"
+          python -m pip install "onnx==1.17.0" "protobuf<6" "openvino" 
           mkdir -p "$HOME/pnnx"
           curl -fL --retry 4 "https://github.com/pnnx/pnnx/releases/download/20260704/pnnx-20260704-linux.zip" -o /tmp/pnnx.zip
           unzip -q /tmp/pnnx.zip -d "$HOME/pnnx"
@@ -105,6 +105,11 @@ jobs:
           pnnx ../onnx/gaze.onnx 'inputshape=[1,3,60,60],[1,3,60,60],[1,3]'
           mv ../onnx/gaze.ncnn.param gaze.param
           mv ../onnx/gaze.ncnn.bin gaze.bin
+
+          cd ../..
+          python scripts/map_head_outputs.py work/ir/head_pose.xml work/onnx/head_pose.onnx work/ncnn/head_mapping.json
+          python scripts/canonicalize_ncnn_names.py work/ncnn/head_pose.param work/ncnn/landmarks35.param work/ncnn/gaze.param work/ncnn/head_mapping.json
+          cd work/ncnn
 
           echo "=== NCNN files ==="
           ls -lh *.param *.bin
