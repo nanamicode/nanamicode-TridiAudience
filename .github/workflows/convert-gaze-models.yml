@@ -26,8 +26,6 @@ jobs:
           set -euxo pipefail
           python -m pip install --upgrade pip
           python -m pip install "onnx==1.17.0" "protobuf<6" "pnnx==20260526"
-          git clone --depth 1 https://github.com/kuroko1t/openvino2onnx.git /tmp/openvino2onnx
-          python -m pip install /tmp/openvino2onnx
 
       - name: Download Open Model Zoo IR models
         run: |
@@ -42,16 +40,36 @@ jobs:
           curl -fL --retry 4 "$LM_BASE.xml" -o work/ir/landmarks35.xml
           curl -fL --retry 4 "$LM_BASE.bin" -o work/ir/landmarks35.bin
 
-      - name: Convert head pose and landmarks OpenVINO IR to ONNX
+      - name: Convert facial-landmarks-35 ADAS IR to ONNX
         run: |
           set -euxo pipefail
-          cd work/ir
-          vino2onnx head_pose
-          vino2onnx landmarks35
-          mv head-pose-estimation-adas-0001.onnx ../onnx/head_pose.onnx
-          mv facial-landmarks-35-adas-0002.onnx ../onnx/landmarks35.onnx
-          cd ../..
-          python scripts/fix_vino_onnx.py work/onnx/head_pose.onnx work/onnx/landmarks35.onnx
+          mkdir -p work/landmarks_convert
+          docker pull ghcr.io/pinto0309/openvino2tensorflow:latest
+          docker run --rm \
+            -v "$PWD/work:/home/user/workdir" \
+            -w /home/user/workdir \
+            ghcr.io/pinto0309/openvino2tensorflow:latest \
+            openvino2tensorflow \
+              --model_path ir/landmarks35.xml \
+              --model_output_path landmarks_convert \
+              --output_onnx \
+              --onnx_opset 11 \
+              --keep_input_tensor_in_nchw \
+              --string_formulas_for_normalization 'data * 1' \
+              --non_verbose
+          find work/landmarks_convert -type f -name '*.onnx' -printf '%s %p\n' | sort -n
+          python scripts/select_model_onnx.py landmarks work/landmarks_convert work/onnx/landmarks35.onnx
+
+      - name: Download PINTO head-pose ADAS ONNX bundle
+        run: |
+          set -euxo pipefail
+          mkdir -p work/pinto_head
+          curl -fL --retry 4 \
+            "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/134_head-pose-estimation-adas-0001/resources.tar.gz" \
+            -o work/pinto_head/resources.tar.gz
+          tar -xzf work/pinto_head/resources.tar.gz -C work/pinto_head
+          find work/pinto_head -type f -name '*.onnx' -printf '%s %p\n' | sort -n
+          python scripts/select_model_onnx.py head work/pinto_head work/onnx/head_pose.onnx
 
       - name: Download PINTO gaze ADAS ONNX bundle
         run: |
