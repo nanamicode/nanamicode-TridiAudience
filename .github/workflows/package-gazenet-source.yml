@@ -1,0 +1,33 @@
+name: package-gazenet-source
+
+on:
+  push:
+    branches:
+      - work/gazenet-v1.22.0
+    paths:
+      - ".github/workflows/package-gazenet-source.yml"
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record source commit
+        run: |
+          set -euxo pipefail
+          mkdir -p source-meta
+          printf '%s\n' "$GITHUB_SHA" > source-meta/BUILD_COMMIT.txt
+          printf '%s\n' "work/gazenet-v1.22.0" > source-meta/BRANCH.txt
+      - name: Upload source patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: TridiAudience-v1.22.0-GAZENET-RADAR3D-SOURCE-PATCH
+          path: |
+            native/**
+            scripts/**
+            .github/workflows/convert-gaze-models.yml
+            .github/workflows/package-gazenet-source.yml
+            README.md
+            source-meta/**
+          retention-days: 30
