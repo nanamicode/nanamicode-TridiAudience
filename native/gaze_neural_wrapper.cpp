@@ -141,8 +141,30 @@ struct Frame {
 struct GazeResult {
     bool valid=false,accepted=false;
     float score=0,yaw=0,pitch=0,roll=0,gx=0,gy=0,gz=-1;
-    float hitX=0,hitY=0,depth=0,residual=9;
+    float hitX=0,hitY=0,depth=0,residual=9,eyeQuality=0;
 };
+
+static float rgbPatchQuality(const std::vector<uint8_t>& rgb,int w,int h){
+    if((int)rgb.size()<w*h*3||w<12||h<12)return 0.f;
+    double sum=0,sq=0,grad=0;int n=0,gn=0;
+    auto lum=[&](int x,int y){
+        const uint8_t* p=&rgb[((size_t)y*w+x)*3];
+        return (77*(int)p[0]+150*(int)p[1]+29*(int)p[2])>>8;
+    };
+    for(int y=2;y<h-2;y+=2)for(int x=2;x<w-2;x+=2){
+        int l=lum(x,y);sum+=l;sq+=(double)l*l;++n;
+        grad+=std::abs(l-lum(x-2,y))+std::abs(l-lum(x,y-2));gn+=2;
+    }
+    if(!n||!gn)return 0.f;
+    float mean=(float)(sum/n);
+    float var=(float)std::max(0.0,sq/n-(double)mean*mean);
+    float dev=std::sqrt(var),g=(float)(grad/gn);
+    if(mean<22.f||mean>238.f||dev<8.f||g<1.8f)return 0.f;
+    float exposure=clampf(1.f-std::fabs(mean-128.f)/112.f,.10f,1.f);
+    float contrast=clampf(dev/38.f,.15f,1.f);
+    float sharp=clampf(g/14.f,.12f,1.f);
+    return exposure*(.35f+.65f*contrast)*(.25f+.75f*sharp);
+}
 
 class NeuralGaze {
 public:
@@ -179,7 +201,7 @@ public:
             }
         }
         if(!std::isfinite(r.yaw)||!std::isfinite(r.pitch)||!std::isfinite(r.roll)||
-           std::fabs(r.yaw)>75.f||std::fabs(r.pitch)>55.f||std::fabs(r.roll)>45.f)return r;
+           std::fabs(r.yaw)>60.f||std::fabs(r.pitch)>45.f||std::fabs(r.roll)>40.f)return r;
 
         ncnn::Mat landmarks;
         {
@@ -196,6 +218,12 @@ public:
         // Follow the official OMZ gaze pipeline: roll-align both eye crops,
         // feed roll=0, then rotate the predicted gaze back afterwards.
         if(!f.cropRotated(le,60,60,r.roll,leftRgb)||!f.cropRotated(re,60,60,r.roll,rightRgb))return r;
+        float lq=rgbPatchQuality(leftRgb,60,60),rq=rgbPatchQuality(rightRgb,60,60);
+        r.eyeQuality=std::min(lq,rq);
+        // Abstain instead of asking GazeNet to hallucinate direction from a
+        // dark/blurred/undersampled eye crop. This also saves the heaviest
+        // network call on frames that cannot become reliable evidence.
+        if(r.eyeQuality<.11f)return r;
         ncnn::Mat li=ncnn::Mat::from_pixels(leftRgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
         ncnn::Mat ri=ncnn::Mat::from_pixels(rightRgb.data(),ncnn::Mat::PIXEL_RGB2BGR,60,60);
         ncnn::Mat pose(3);pose[0]=r.yaw;pose[1]=r.pitch;pose[2]=0.f;
@@ -248,9 +276,9 @@ public:
         float ny=std::fabs(r.hitY-screenY)/safeHalfH;
         r.residual=std::max(nx,ny);
         r.valid=true;
-        if(nx<=1.f&&ny<=1.f){
+        if(nx<=1.f&&ny<=1.f&&r.eyeQuality>=.14f&&detector>=.55f){
             r.accepted=true;
-            r.score=clampf(.96f-.20f*r.residual,.72f,.96f);
+            r.score=clampf((.96f-.20f*r.residual)*clampf(.72f+.28f*r.eyeQuality,.72f,1.f),.70f,.96f);
         }else{
             r.score=clampf(.60f-.35f*std::max(0.f,r.residual-1.f),0.f,.60f);
         }
