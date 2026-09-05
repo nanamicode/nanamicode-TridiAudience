@@ -1,0 +1,95 @@
+name: build-linux-collector
+
+on:
+  push:
+    branches:
+      - work/gazenet-v1.22.2-polished
+    paths:
+      - "server/**"
+      - ".github/workflows/build-linux-collector.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Static checks
+        run: |
+          set -euxo pipefail
+          test -z "$(gofmt -l server/*.go)"
+          go vet ./server
+
+      - name: Build static Linux binaries
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/linux-amd64 dist/linux-arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath             -ldflags="-s -w -X main.version=v1.0.0"             -o dist/linux-amd64/TridiCollectorServer ./server
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath             -ldflags="-s -w -X main.version=v1.0.0"             -o dist/linux-arm64/TridiCollectorServer ./server
+          for d in dist/linux-amd64 dist/linux-arm64; do
+            cp server/INICIAR_SERVIDOR.sh server/TridiCollectorServer.desktop server/README_SERVIDOR.md "$d/"
+            chmod +x "$d/TridiCollectorServer" "$d/INICIAR_SERVIDOR.sh"
+          done
+          file dist/linux-amd64/TridiCollectorServer dist/linux-arm64/TridiCollectorServer
+          sha256sum dist/linux-amd64/TridiCollectorServer dist/linux-arm64/TridiCollectorServer             | tee dist/CHECKSUMS_SHA256.txt
+
+      - name: End-to-end protocol and mounting test
+        run: |
+          set -euxo pipefail
+          cat >/tmp/mkjpeg.go <<'GO'
+          package main
+          import ("image";"image/color";"image/jpeg";"os")
+          func main(){m:=image.NewRGBA(image.Rect(0,0,640,480));for y:=0;y<480;y++{for x:=0;x<640;x++{m.Set(x,y,color.RGBA{42,48,55,255})}};f,_:=os.Create("/tmp/frame.jpg");defer f.Close();_ = jpeg.Encode(f,m,&jpeg.Options{Quality:90})}
+          GO
+          go run /tmp/mkjpeg.go
+          rm -rf /tmp/tridi-data
+          dist/linux-amd64/TridiCollectorServer --data /tmp/tridi-data >/tmp/tridi-server.log 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true; cat /tmp/tridi-server.log || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8791/ping | grep -q TRIDI_COLLECTOR_OK; then break; fi
+            sleep .2
+          done
+
+          U1=11111111-1111-1111-1111-111111111111
+          U2=22222222-2222-2222-2222-222222222222
+          S=tridi_audience_ci
+
+          curl -fsS -X POST --data-binary @/tmp/frame.jpg             "http://127.0.0.1:8791/image?session=$S&name=impressao_1_${U1}_final.jpg"
+          printf '%s' "EVENTO | uuid=$U1 | tipo=impressao | numero=1 | genero=feminino | data=2026-09-05 14:04:05.123 | track=7 | frame=640x480 | bbox=220,90,120,120"             | curl -fsS -X POST --data-binary @- "http://127.0.0.1:8791/log?session=$S"
+
+          curl -fsS -X POST --data-binary @/tmp/frame.jpg             "http://127.0.0.1:8791/image?session=$S&name=alcance_2_${U2}_final.jpg"
+          printf '%s' "EVENTO | uuid=$U2 | tipo=alcance | numero=2 | genero=nao_aplicavel | data=2026-09-05 14:04:06.456 | track=8 | frame=640x480 | bbox=250,80,80,90"             | curl -fsS -X POST --data-binary @- "http://127.0.0.1:8791/log?session=$S"
+
+          python - <<'PY'
+          import socket
+          s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+          s.settimeout(2)
+          s.bind(("127.0.0.1",0))
+          s.sendto(b"TRIDI_COLLECTOR_DISCOVER_V1",("127.0.0.1",8790))
+          data,_=s.recvfrom(256)
+          assert data==b"TRIDI_COLLECTOR_HERE|8791", data
+          PY
+
+          test -f /tmp/tridi-data/2026-09-05/IMPRESSOES_MONTADAS/Feminino/impressao_000001_14-04-05-000_${U1}.jpg
+          test -f /tmp/tridi-data/2026-09-05/ALCANCES_MONTADOS/alcance_000002_14-04-06-000_${U2}.jpg
+          test -f /tmp/tridi-data/2026-09-05/index.csv
+          grep -q impressao /tmp/tridi-data/2026-09-05/index.csv
+          grep -q alcance /tmp/tridi-data/2026-09-05/index.csv
+
+      - name: Upload Linux collector
+        uses: actions/upload-artifact@v4
+        with:
+          name: TridiCollectorServer-v1.0.0-Linux
+          path: |
+            dist/linux-amd64/**
+            dist/linux-arm64/**
+            dist/CHECKSUMS_SHA256.txt
+          compression-level: 6
+          retention-days: 30
