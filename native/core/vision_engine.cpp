@@ -150,9 +150,9 @@ public:
     }
 
     std::vector<Face> detect(const YuvFrame& frame, int longSide, float threshold) {
-        std::vector<uint8_t> rgb; int sw, sh;
-        frame.resizeRgb(longSide, rgb, sw, sh);
-        ncnn::Mat input = ncnn::Mat::from_pixels(rgb.data(), ncnn::Mat::PIXEL_RGB, sw, sh);
+        int sw, sh;
+        frame.resizeRgb(longSide, rgbScratch, sw, sh);
+        ncnn::Mat input = ncnn::Mat::from_pixels(rgbScratch.data(), ncnn::Mat::PIXEL_RGB, sw, sh);
         int wp = (sw + 31) / 32 * 32 - sw, hp = (sh + 31) / 32 * 32 - sh;
         ncnn::Mat padded;
         ncnn::copy_make_border(input, padded, hp / 2, hp - hp / 2, wp / 2, wp - wp / 2,
@@ -162,7 +162,7 @@ public:
         padded.substract_mean_normalize(mean, norm);
         ncnn::Extractor ex = net.create_extractor();
         ex.input("input.1", padded);
-        std::vector<Face> proposals;
+        std::vector<Face> proposals; proposals.reserve(96);
         const int strides[3] = {8, 16, 32}, bases[3] = {16, 64, 256};
         for (int z = 0; z < 3; ++z) {
             ncnn::Mat s, b, k;
@@ -173,7 +173,7 @@ public:
             generateProposals(bases[z], strides[z], s, b, k, threshold, proposals);
         }
         std::sort(proposals.begin(), proposals.end(), [](const Face& a, const Face& b){ return a.score > b.score; });
-        std::vector<Face> result;
+        std::vector<Face> result; result.reserve(10);
         for (const Face& raw : proposals) {
             bool keep = true;
             for (const Face& old : result) if (iou(raw.box, old.box) > .40f) { keep = false; break; }
@@ -195,7 +195,9 @@ public:
         }
         return result;
     }
-private: ncnn::Net net;
+private:
+    ncnn::Net net;
+    std::vector<uint8_t> rgbScratch;
 };
 
 struct AttentionResult {
@@ -392,12 +394,12 @@ public:
     }
 
     std::vector<PersonDetection> detect(const YuvFrame& frame) {
-        std::vector<uint8_t> rgb; int sw=0, sh=0;
+        int sw=0, sh=0;
         // A 720x1280 logical frame would become only 180 pixels wide at 320.
         // Preserve enough horizontal face/body detail for the portrait EMEET
         // while keeping the NanoDet graph and output decoding unchanged.
-        frame.resizeRgb(320, rgb, sw, sh);
-        ncnn::Mat input=ncnn::Mat::from_pixels(rgb.data(),ncnn::Mat::PIXEL_RGB2BGR,sw,sh);
+        frame.resizeRgb(320, rgbScratch, sw, sh);
+        ncnn::Mat input=ncnn::Mat::from_pixels(rgbScratch.data(),ncnn::Mat::PIXEL_RGB2BGR,sw,sh);
         int wp=(sw+31)/32*32-sw,hp=(sh+31)/32*32-sh;
         ncnn::Mat padded;
         ncnn::copy_make_border(input,padded,hp/2,hp-hp/2,wp/2,wp-wp/2,ncnn::BORDER_CONSTANT,0.f);
@@ -406,7 +408,7 @@ public:
         padded.substract_mean_normalize(mean,norm);
         ncnn::Extractor ex=net.create_extractor();
         ex.input("input.1",padded);
-        std::vector<PersonDetection> proposals;
+        std::vector<PersonDetection> proposals; proposals.reserve(96);
         for(int stride:{8,16,32}) {
             ncnn::Mat cls,dis; std::string suffix=std::to_string(stride);
             if(ex.extract(("cls_pred_stride_"+suffix).c_str(),cls)!=0)continue;
@@ -433,7 +435,7 @@ public:
             }
         }
         std::sort(proposals.begin(),proposals.end(),[](const PersonDetection&a,const PersonDetection&b){return a.score>b.score;});
-        std::vector<PersonDetection> result;
+        std::vector<PersonDetection> result; result.reserve(12);
         for(const auto& p:proposals){
             // NanoDet occasionally emits two partially overlapping person boxes for one body.
             // A slightly stricter NMS prevents both boxes from becoming independent sessions.
@@ -442,7 +444,9 @@ public:
         }
         return result;
     }
-private:ncnn::Net net;
+private:
+    ncnn::Net net;
+    std::vector<uint8_t> rgbScratch;
 };
 
 struct WeightedGender { float probability=0, weight=0; };
@@ -478,6 +482,8 @@ class Engine {
 public:
     bool load(AAssetManager* assets) {
         ncnn::set_cpu_powersave(0); ncnn::set_omp_num_threads(2);
+        tracks.reserve(24);
+        genderAlignedScratch.reserve(128*128*3);
         ready = detector.load(assets) && people.load(assets) && gender.load(assets);
         return ready;
     }
@@ -532,7 +538,8 @@ public:
         }),tracks.end());
         int visible=0;
         for(const auto& t:tracks)if(shouldOutput(t,timestamp)||t.newImpression||t.eventFlags)++visible;
-        std::vector<float> out={1,(float)frame.width,(float)frame.height,(float)mode,(float)visible,0};
+        std::vector<float> out; out.reserve(6+(size_t)visible*24);
+        out={1,(float)frame.width,(float)frame.height,(float)mode,(float)visible,0};
         for(auto& t:tracks){
             if(!shouldOutput(t,timestamp)&&!t.newImpression&&!t.eventFlags)continue;
             bool freshFace=t.hasFace&&timestamp-t.lastFace<750000000LL;
@@ -721,7 +728,7 @@ private:
         // far-away faces/autofocus transitions from biasing the public label.
         if(relative>=.035f&&facePixels>=46.f&&observed.score>=.58f&&
            poseQuality>=.16f&&ts-t.lastGender>=genderInterval){
-            std::vector<uint8_t> aligned;
+            auto& aligned=genderAlignedScratch;
             if(align128(frame,observed,aligned)){
                 float visual=cropVisualQuality(aligned);
                 float pixelQuality=clampf((facePixels-42.f)/86.f,.12f,1.20f);
@@ -889,7 +896,9 @@ private:
         }
     }
 
-    Scrfd detector;PersonDetector people;GenderNet gender;std::vector<PersonTrack> tracks;std::mutex lock;
+    Scrfd detector;PersonDetector people;GenderNet gender;std::vector<PersonTrack> tracks;
+    std::vector<uint8_t> genderAlignedScratch;
+    std::mutex lock;
     AttentionCalibration attentionCalibration;
     int frameNo=0,nextId=1;bool ready=false;
 };
