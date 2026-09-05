@@ -3,7 +3,7 @@ name: convert-gaze-models
 on:
   push:
     branches:
-      - work/gazenet-v1.22.2-polished
+      - work/gazenet-v1.22.3-exact-server-boxes
     paths:
       - ".github/workflows/convert-gaze-models.yml"
       - "scripts/**"
@@ -187,7 +187,7 @@ jobs:
       - name: Upload ARMv7 GazeNet package
         uses: actions/upload-artifact@v4
         with:
-          name: tridi-gazenet-v1.22.2-POLISHED-armv7
+          name: tridi-gazenet-v1.22.3-EXACT-armv7
           path: |
             work/package/**
           compression-level: 6
