@@ -1,0 +1,37 @@
+name: export-android-dex-toolchain
+
+on:
+  push:
+    branches:
+      - work/gazenet-v1.22.2-polished
+    paths:
+      - ".github/workflows/export-android-dex-toolchain.yml"
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export android.jar and D8/R8
+        run: |
+          set -euxo pipefail
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          ANDROID_JAR="$(find "$SDK/platforms" -maxdepth 2 -name android.jar | sort -V | tail -n1)"
+          D8="$(find "$SDK/build-tools" -maxdepth 2 -type f -name d8 | sort -V | tail -n1)"
+          test -f "$ANDROID_JAR"
+          test -x "$D8"
+          BT="$(dirname "$D8")"
+          mkdir -p toolchain
+          cp "$ANDROID_JAR" toolchain/android.jar
+          cp "$D8" toolchain/d8
+          cp -a "$BT/lib" toolchain/lib
+          printf '%s\n' "$ANDROID_JAR" "$D8" > toolchain/SOURCE_PATHS.txt
+          ls -lh toolchain/android.jar toolchain/lib/*
+      - name: Upload toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-dex-toolchain
+          path: toolchain/**
+          compression-level: 6
+          retention-days: 7
