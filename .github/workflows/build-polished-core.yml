@@ -3,7 +3,7 @@ name: build-polished-core
 on:
   push:
     branches:
-      - work/gazenet-v1.22.2-polished
+      - work/gazenet-v1.22.3-exact-server-boxes
     paths:
       - "native/core/**"
       - ".github/workflows/build-polished-core.yml"
@@ -43,7 +43,7 @@ jobs:
       - name: Upload core
         uses: actions/upload-artifact@v4
         with:
-          name: tridi-v1.22.2-polished-core-armv7
+          name: tridi-v1.22.3-exact-core-armv7
           path: work/out/**
           compression-level: 6
           retention-days: 14
