@@ -565,7 +565,7 @@ public:
         }),tracks.end());
         int visible=0;
         for(const auto& t:tracks)if(shouldOutput(t,timestamp)||t.newImpression||t.eventFlags)++visible;
-        std::vector<float> out; out.reserve(6+(size_t)visible*24);
+        std::vector<float> out; out.reserve(6+(size_t)visible*28);
         out={1,(float)frame.width,(float)frame.height,(float)mode,(float)visible,0};
         for(auto& t:tracks){
             if(!shouldOutput(t,timestamp)&&!t.newImpression&&!t.eventFlags)continue;
@@ -580,7 +580,8 @@ public:
                                   (float)t.attentionEvaluation,t.attentionScore,(float)t.frontalHits,
                                   t.signedYawEye,t.signedYawMouth,t.faceScale,t.pitchRatio,t.rollDegrees,
                                   t.expectedYawEye,t.expectedYawMouth,t.targetResidual,
-                                  t.attentionGeometryValid?1.f:0.f});
+                                  t.attentionGeometryValid?1.f:0.f,
+                                  t.body.x,t.body.y,t.body.w,t.body.h});
         }
         out[5]=(float)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
         emaProcessMs=.88f*emaProcessMs+.12f*out[5];
