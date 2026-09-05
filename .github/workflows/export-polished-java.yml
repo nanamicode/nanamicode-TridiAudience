@@ -1,0 +1,28 @@
+name: export-polished-java
+
+on:
+  push:
+    branches:
+      - work/gazenet-v1.22.2-polished
+    paths:
+      - ".github/workflows/export-polished-java.yml"
+      - "app/src/main/java/com/tridi/audience/CameraController.java"
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage polished Java source
+        run: |
+          set -euxo pipefail
+          mkdir -p out/com/tridi/audience
+          cp app/src/main/java/com/tridi/audience/CameraController.java out/com/tridi/audience/
+          sha256sum out/com/tridi/audience/CameraController.java > out/CHECKSUMS_SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tridi-v1.22.2-polished-java
+          path: out/**
+          compression-level: 6
+          retention-days: 7
