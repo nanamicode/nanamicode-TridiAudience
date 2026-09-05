@@ -369,16 +369,41 @@ public:
                net.load_model(assets, "fastface_mnv3_large_128_int8.bin") == 0;
     }
     float maleProbability(const std::vector<uint8_t>& rgb) {
+        return maleProbabilityRaw(rgb);
+    }
+    // Same FastFace MobileNetV3 INT8. Only uncertain crops receive a mirrored
+    // second opinion; strong self-disagreement abstains instead of forcing a label.
+    float maleProbabilityStable(const std::vector<uint8_t>& rgb, float* flipAgreement=nullptr) {
+        float p0=maleProbabilityRaw(rgb);
+        if(p0<0.f){if(flipAgreement)*flipAgreement=0.f;return p0;}
+        if(p0<=.26f||p0>=.74f){if(flipAgreement)*flipAgreement=1.f;return p0;}
+        mirrorScratch.resize(rgb.size());
+        for(int y=0;y<128;++y)for(int x=0;x<128;++x){
+            const uint8_t* src=&rgb[((size_t)y*128+x)*3];
+            uint8_t* dst=&mirrorScratch[((size_t)y*128+(127-x))*3];
+            dst[0]=src[0];dst[1]=src[1];dst[2]=src[2];
+        }
+        float p1=maleProbabilityRaw(mirrorScratch);
+        if(p1<0.f){if(flipAgreement)*flipAgreement=0.f;return p0;}
+        float delta=std::fabs(p0-p1);
+        float agreement=1.f-clampf(delta/.30f,0.f,1.f);
+        if(flipAgreement)*flipAgreement=agreement;
+        if(delta>.28f)return -.2f;
+        return .5f*(p0+p1);
+    }
+private:
+    float maleProbabilityRaw(const std::vector<uint8_t>& rgb) {
         ncnn::Mat in = ncnn::Mat::from_pixels(rgb.data(), ncnn::Mat::PIXEL_RGB, 128, 128);
         const float mean[3] = {123.675f,116.28f,103.53f};
         const float norm[3] = {.0171247538f,.0175070028f,.0174291939f};
         in.substract_mean_normalize(mean,norm);
-        ncnn::Extractor ex=net.create_extractor(); ex.input("in0",in);
+        ncnn::Extractor ex=net.create_extractor(); ex.set_light_mode(true); ex.input("in0",in);
         ncnn::Mat out; if(ex.extract("out0",out)!=0 || out.total()<2) return -.1f;
         float m=std::max(out[0],out[1]),e0=std::exp(out[0]-m),e1=std::exp(out[1]-m);
         return e1/(e0+e1);
     }
-private: ncnn::Net net;
+    ncnn::Net net;
+    std::vector<uint8_t> mirrorScratch;
 };
 
 struct PersonDetection { Rect box; float score=0; };
@@ -512,12 +537,14 @@ public:
         if (!ready) return {0,(float)frame.width,(float)frame.height,0,0,0};
         auto started=std::chrono::steady_clock::now();
         ++frameNo;
-        // A light face scan every three delivered frames gives much lower
-        // response latency than the v1.19 five-frame cadence. Medium/max scans
-        // remain periodic for distant faces, while the average pixel budget is
-        // lower than v1.19 to avoid stalling the BTV B11 ARMv7 CPU.
-        int mode=(frameNo==1||frameNo%54==0)?3:(frameNo%18==0?2:(frameNo%3==0?1:0));
-        bool bodyScan=(frameNo==1||frameNo%12==0);
+        // Preserve the validated scan hierarchy while adapting cadence when
+        // actual ARMv7 frame cost rises, so detector bursts do not starve preview.
+        int lightEvery=3,mediumEvery=18,maxEvery=54,bodyEvery=12;
+        if(emaProcessMs>72.f){lightEvery=5;mediumEvery=30;maxEvery=90;bodyEvery=15;}
+        else if(emaProcessMs>48.f){lightEvery=4;mediumEvery=24;maxEvery=72;bodyEvery=12;}
+        int mode=(frameNo==1||frameNo%maxEvery==0)?3:
+                 (frameNo%mediumEvery==0?2:(frameNo%lightEvery==0?1:0));
+        bool bodyScan=(frameNo==1||frameNo%bodyEvery==0);
         for(auto& t:tracks){t.newImpression=false;t.eventFlags=0;t.attentionEvaluation=0;t.bodyMatched=false;t.faceMatched=false;}
         if(bodyScan){associateBodies(people.detect(frame),frame,timestamp);mergeDuplicateTracks(timestamp);}
         if(mode){
@@ -556,6 +583,7 @@ public:
                                   t.attentionGeometryValid?1.f:0.f});
         }
         out[5]=(float)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+        emaProcessMs=.88f*emaProcessMs+.12f*out[5];
         return out;
     }
 private:
@@ -741,9 +769,16 @@ private:
                     room=quality>minw*1.12f;
                 }
                 if(visual>=.14f&&quality>=.020f&&room){
-                    float p=gender.maleProbability(aligned);
+                    float flipAgreement=1.f;
+                    float p=gender.maleProbabilityStable(aligned,&flipAgreement);
                     t.lastGender=ts;
-                    if(p>=0.f){addGenderSample(t,{p,quality});lockVote(t);}
+                    if(p>=0.f&&flipAgreement>=.22f){
+                        quality*=.72f+.28f*flipAgreement;
+                        addGenderSample(t,{p,quality});lockVote(t);
+                    }
+                } else {
+                    // Avoid retrying the same low-quality crop on every face scan.
+                    t.lastGender=ts;
                 }
             }
         }
@@ -786,15 +821,15 @@ private:
         // v1.20.2: prefer Indeterminado over a wrong public label. The model
         // and crops are unchanged; only a stronger temporal consensus can
         // publish Masculino/Feminino.
-        bool ready=(n>=5&&confidence>=.90f&&agreement>=.90f)||
-                   (n>=8&&confidence>=.82f&&agreement>=.8125f)||
-                   (n>=11&&confidence>=.76f&&agreement>=.80f);
+        bool ready=(n>=5&&confidence>=.91f&&agreement>=.92f)||
+                   (n>=8&&confidence>=.84f&&agreement>=.86f)||
+                   (n>=11&&confidence>=.79f&&agreement>=.84f);
         if(!ready)return;
         if(t.gender<0){t.gender=candidate;t.genderConfidence=confidence;return;}
         if(candidate==t.gender){t.genderConfidence=std::max(t.genderConfidence,confidence);return;}
         // Hysteresis keeps the public preview stable. An opposite label needs
         // substantially stronger, longer evidence before replacing it.
-        if(n>=11&&confidence>=.92f&&agreement>=.92f){
+        if(n>=11&&confidence>=.94f&&agreement>=.94f){
             t.gender=candidate;t.genderConfidence=confidence;
         }
     }
@@ -901,6 +936,7 @@ private:
     std::mutex lock;
     AttentionCalibration attentionCalibration;
     int frameNo=0,nextId=1;bool ready=false;
+    float emaProcessMs=38.f;
 };
 
 static jfloatArray toArray(JNIEnv* env,const std::vector<float>& values){
