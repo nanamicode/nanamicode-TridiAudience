@@ -1,0 +1,49 @@
+name: build-polished-core
+
+on:
+  push:
+    branches:
+      - work/gazenet-v1.22.2-polished
+    paths:
+      - "native/core/**"
+      - ".github/workflows/build-polished-core.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download NCNN Android SDK
+        run: |
+          set -euxo pipefail
+          mkdir -p work/ncnn
+          curl -fL --retry 4             "https://github.com/Tencent/ncnn/releases/download/20260526/ncnn-20260526-android.zip"             -o work/ncnn/ncnn.zip
+          unzip -q work/ncnn/ncnn.zip -d work/ncnn/unpacked
+          find work/ncnn/unpacked -path '*/armeabi-v7a/lib/libncnn.a' -print
+      - name: Build core for Android 9 ARMv7
+        run: |
+          set -euxo pipefail
+          NDK="${ANDROID_NDK_HOME:-$ANDROID_NDK_ROOT}"
+          test -d "$NDK"
+          PRE="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          CXX="$PRE/bin/clang++"
+          NCNN="$(find "$PWD/work/ncnn/unpacked" -path '*/armeabi-v7a/lib/libncnn.a' | head -n1)"
+          test -f "$NCNN"
+          INC="$(dirname "$(dirname "$NCNN")")/include/ncnn"
+          test -d "$INC"
+          mkdir -p work/out
+          "$CXX"             --target=armv7a-linux-androideabi28             --sysroot="$PRE/sysroot"             -shared -fPIC -O3 -DNDEBUG -ffast-math -fvisibility=hidden             -std=c++17 -fexceptions -frtti -mfpu=neon             -fopenmp -static-openmp -static-libstdc++             -Wl,--gc-sections -Wl,--no-undefined             -I"$INC" native/core/vision_engine.cpp "$NCNN"             -landroid -llog -lm -ldl             -o work/out/libtridi_vision_core.so
+          "$PRE/bin/llvm-strip" --strip-unneeded work/out/libtridi_vision_core.so
+          file work/out/libtridi_vision_core.so
+          "$PRE/bin/llvm-readelf" -d work/out/libtridi_vision_core.so | tee work/out/ELF_DYNAMIC.txt
+          "$PRE/bin/llvm-readelf" -Ws work/out/libtridi_vision_core.so             | grep 'Java_com_tridi_audience_NativeBridge_' | tee work/out/JNI_EXPORTS.txt
+          test "$(wc -l < work/out/JNI_EXPORTS.txt)" -ge 4
+          sha256sum work/out/libtridi_vision_core.so | tee work/out/CHECKSUMS_SHA256.txt
+      - name: Upload core
+        uses: actions/upload-artifact@v4
+        with:
+          name: tridi-v1.22.2-polished-core-armv7
+          path: work/out/**
+          compression-level: 6
+          retention-days: 14
