@@ -23,21 +23,23 @@ jobs:
       - name: Static checks
         run: |
           set -euxo pipefail
-          test -z "$(gofmt -l server/*.go)"
-          go vet ./server
+          test -z "$(gofmt -l *.go)"
+          go vet .
+        working-directory: server
 
       - name: Build static Linux binaries
         run: |
           set -euxo pipefail
-          mkdir -p dist/linux-amd64 dist/linux-arm64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath             -ldflags="-s -w -X main.version=v1.0.0"             -o dist/linux-amd64/TridiCollectorServer ./server
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath             -ldflags="-s -w -X main.version=v1.0.0"             -o dist/linux-arm64/TridiCollectorServer ./server
-          for d in dist/linux-amd64 dist/linux-arm64; do
-            cp server/INICIAR_SERVIDOR.sh server/TridiCollectorServer.desktop server/README_SERVIDOR.md "$d/"
+          mkdir -p ../dist/linux-amd64 ../dist/linux-arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath             -ldflags="-s -w -X main.version=v1.0.0"             -o ../dist/linux-amd64/TridiCollectorServer .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath             -ldflags="-s -w -X main.version=v1.0.0"             -o ../dist/linux-arm64/TridiCollectorServer .
+          for d in ../dist/linux-amd64 ../dist/linux-arm64; do
+            cp INICIAR_SERVIDOR.sh TridiCollectorServer.desktop README_SERVIDOR.md "$d/"
             chmod +x "$d/TridiCollectorServer" "$d/INICIAR_SERVIDOR.sh"
           done
-          file dist/linux-amd64/TridiCollectorServer dist/linux-arm64/TridiCollectorServer
-          sha256sum dist/linux-amd64/TridiCollectorServer dist/linux-arm64/TridiCollectorServer             | tee dist/CHECKSUMS_SHA256.txt
+          file ../dist/linux-amd64/TridiCollectorServer ../dist/linux-arm64/TridiCollectorServer
+          sha256sum ../dist/linux-amd64/TridiCollectorServer ../dist/linux-arm64/TridiCollectorServer             | tee ../dist/CHECKSUMS_SHA256.txt
+        working-directory: server
 
       - name: End-to-end protocol and mounting test
         run: |
