@@ -3,7 +3,7 @@ name: build-linux-collector
 on:
   push:
     branches:
-      - work/gazenet-v1.22.2-polished
+      - work/gazenet-v1.22.3-exact-server-boxes
     paths:
       - "server/**"
       - ".github/workflows/build-linux-collector.yml"
