@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Tridi Collector Server
+Comment=Servidor de imagens do TridiAudience
+Terminal=true
+Exec=sh -c 'cd "$(dirname "$1")" && ./INICIAR_SERVIDOR.sh' dummy %k
+Icon=utilities-terminal
+Categories=Utility;
