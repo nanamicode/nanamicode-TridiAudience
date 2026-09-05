@@ -25,8 +25,11 @@ jobs:
           name: TridiAudience-v1.22.2-POLISHED-GAZENET-RADAR3D-SOURCE-PATCH
           path: |
             native/**
+            app/src/main/java/com/tridi/audience/CameraController.java
+            app/src/main/java/com/tridi/audience/MainActivity.java
             scripts/**
             .github/workflows/convert-gaze-models.yml
+            .github/workflows/build-polished-core.yml
             .github/workflows/package-gazenet-source.yml
             README.md
             source-meta/**
@@ -37,3 +40,5 @@ jobs:
 # refresh turbo package after adaptive scheduler build bb192e8
 
 # final refresh after 25pct duty scheduler 9b4f0bc
+
+# final polished package: preview/gender/core allocator updates
