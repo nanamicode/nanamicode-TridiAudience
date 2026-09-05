@@ -25,12 +25,14 @@ jobs:
           name: TridiAudience-v1.22.2-POLISHED-GAZENET-RADAR3D-SOURCE-PATCH
           path: |
             native/**
+            server/**
             app/src/main/java/com/tridi/audience/CameraController.java
             app/src/main/java/com/tridi/audience/MainActivity.java
             scripts/**
             .github/workflows/convert-gaze-models.yml
             .github/workflows/build-polished-core.yml
             .github/workflows/package-gazenet-source.yml
+            .github/workflows/build-linux-collector.yml
             README.md
             source-meta/**
           retention-days: 30
